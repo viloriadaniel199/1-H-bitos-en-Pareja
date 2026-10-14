@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Vinculación mutua: cada uno apunta al otro con partnerUid.
+    function mutualPartner(uid) {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(uid)).data.partnerUid == request.auth.uid
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.partnerUid == uid;
+    }
+
+    match /users/{uid} {
+      // Perfil básico (nombre, código, partnerUid). Se lee para buscar por código.
+      allow read: if signedIn();
+      allow create, update, delete: if isOwner(uid);
+
+      // Hábitos y días cumplidos: dueño + pareja con vinculación mutua (solo lectura).
+      match /habits/{id} {
+        allow read: if isOwner(uid) || mutualPartner(uid);
+        allow write: if isOwner(uid);
+      }
+      match /logs/{id} {
+        allow read: if isOwner(uid) || mutualPartner(uid);
+        allow write: if isOwner(uid);
+      }
+
+      // Medidas de salud (datos sensibles): SOLO el dueño, y solo si autorizó.
+      match /measures/{id} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && get(/databases/$(database)/documents/users/$(uid)/private/consent).data.sensitive == true;
+      }
+
+      // Consentimiento: solo el dueño.
+      match /private/{doc} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+  }
+}
